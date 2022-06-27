@@ -1,25 +1,9 @@
+import requests
 import asyncio
-import websockets
 import RPi.GPIO as GPIO
 import time
-import json
 
-async def send_distances(event, websocket):
-    count = event['count']
-    if count == 'infinite':
-        while True:
-            distance = {
-                'distance': await get_distance()
-            }
-            await websocket.send(json.dumps(distance))
-            await asyncio.sleep(0.5)
-    else:
-        for _ in range(count):
-            distance = {
-                'distance': await get_distance()
-            }
-            await websocket.send(json.dumps(distance))
-            await asyncio.sleep(0.5)
+url = 'http://192.168.1.73:4001/api/v1/distance'
 
 async def get_distance():
     GPIO.output(pinTrigger, GPIO.LOW)
@@ -28,29 +12,42 @@ async def get_distance():
     await asyncio.sleep(0.01)
     GPIO.output(pinTrigger, GPIO.LOW)
 
+    pulseStartTime = 0
+
     while GPIO.input(pinEcho) == 0:
-            pulseStartTime = time.time()
+        pulseStartTime = time.time()
     while GPIO.input(pinEcho) == 1:
-            pulseEndTime = time.time()
+        pulseEndTime = time.time()
 
     pulseDuration = pulseEndTime - pulseStartTime
     distance = round(pulseDuration * 17150, 2)
 
-    print("Distance: %.2f cm" % (distance))
+    # print("Distance: %.2f cm" % (distance))
     return distance
 
 
-async def handler(websocket):
-    async for message in websocket:
-        event = json.loads(message)
-        if event['type'] == 'get_distance':
-            await send_distances(event, websocket)
-        if event['type'] == 'close':
-            await websocket.wait_closed()
+async def get_distances():
+    count = 0
+    distances = []
+    await get_distance()
+    while count < 20:
+        distance = await get_distance()
+        distances.append(distance)
+        count += 1
+        print(count)
+        await asyncio.sleep(0.5)
+    return distances
+
+async def handle_send_distances():
+    while True:
+        distances = await get_distances()
+        response = requests.post(url, json={'distances': distances})
+        print('Status: {}'.format(response.status_code))
+
 
 async def main():
-    async with websockets.serve(handler, "", 8001):
-        await asyncio.Future()
+    await handle_send_distances()
+    
 
 if __name__ == "__main__":
     try:
@@ -63,10 +60,8 @@ if __name__ == "__main__":
         GPIO.setup(pinTrigger, GPIO.OUT)
         GPIO.setup(pinEcho, GPIO.IN)
 
-        print("main loop run")
+        # print("main loop run")
         asyncio.run(main())
-    except websockets.exceptions.ConnectionClosed:
-        print("ConnectionClosedError")
     finally:
         GPIO.cleanup()
         print("Cleaned up")
